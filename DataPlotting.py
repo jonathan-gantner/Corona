@@ -83,7 +83,7 @@ def plot_growth_rate(data: pd.Series, smoothing_window: int = 4) -> None:
 
     # smoothen by computing thee geometric over a smoothing window
     # of the specified lenght
-    rates_smooth = rates.rolling(window= smoothing_window * pd.to_timedelta('1d')).apply(gmean)
+    rates_smooth = rates.rolling(window=smoothing_window * pd.to_timedelta('1d')).apply(gmean)
     rates_smooth = rates_smooth.dropna()
 
     plt.plot(rates_smooth)

@@ -10,9 +10,25 @@ import matplotlib.pyplot as plt
 
 from datetime import timedelta
 from scipy.integrate import odeint
+from typing_extensions import TypedDict
 
 
-def SIRmodel(data, country, parameter, output=False, forecast=600):
+class SirParameter(TypedDict):
+    """
+    Container Class for parameters for sir model as defined in
+    https://en.wikipedia.org/wiki/Compartmental_models_in_epidemiology#The_SIR_model
+
+    betagamma: DataFrame with two columns for the parameters beta and gamma and a datetime index;
+        index defines from when the parameters are valid; this allows to update the flow parameters to model changes
+        when measures by the government are taken
+    """
+    I0: str
+    t0: str
+    betagamma: pd.DataFrame
+
+
+def compute_sir_model(data: pd.DataFrame, country: str, parameter: SirParameter,
+                      output: bool = False, forecast: int = 600):
 
     def deriv(y, t, N, beta, gamma):
         S, I, R = y
