@@ -16,7 +16,7 @@ import plotly.express as px
 from DataPreparation import load_covid19_data, load_world_data
 from DataPlotting import plotdata
 from ParameterEstimation import estimate_sir_parameters
-from SIR import compute_sir_model
+from SIR import compute_sir_model_old
 
 
 external_stylesheets = ['https://codepen.io/chriddyp/pen/bWLwgP.css']
@@ -138,7 +138,7 @@ def update_data_series(clickData, selected, options):
     [dash.dependencies.Input('graph_map', 'clickData'), dash.dependencies.Input('metric-selected', 'value'), dash.dependencies.Input('metric-selected', 'options')])
 def update_model_series(clickData, selected, options):
     parameter = estimate_sir_parameters(data['confirmed']['data'] - (data['deaths']['data'] + data['recovered']['data']), clickData['points'][0]['location'])
-    data_model = compute_sir_model(data, clickData['points'][0]['location'], parameter, forecast=600)
+    data_model = compute_sir_model_old(data, clickData['points'][0]['location'], parameter, forecast=600)
     return create_model_series(data_model, clickData['points'][0]['location'], [entry['label'] for entry in options if entry['value'] == selected][0])
 
 

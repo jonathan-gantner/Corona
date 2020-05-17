@@ -95,7 +95,7 @@ def estimate_sir_parameters(data, country, threshold=20, output=False, forecast=
         prediction_first_fit = pd.Series(prediction_first_fit, index=forecast_time_index)
         prediction_last_fit = pd.Series(prediction_last_fit, index=forecast_time_index)
 
-
+        # plot forecasts
         plt.plot(prediction_first_fit)
         plt.plot(prediction_last_fit)
         plt.plot(data_confirmed)
