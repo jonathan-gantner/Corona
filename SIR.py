@@ -86,10 +86,21 @@ def compute_sir_model_old(data: pd.DataFrame, country: str, parameter: SirParame
     return SIR_data
 
 
-def compute_sir_model(population: int, parameter: SirParameter, recovered: Optional[int] = 0,
+def compute_sir_model(t0: date, I0: int, N: int, beta: float, gamma: float, R0: Optional[int] = 0,
                       forecast: Optional[int] = 600) -> pd.DataFrame:
     """
-    Simulates the pandemics based on the SIR model
+    Simulates the pandemics based on the SIR model for a given set of parameters
+    :param t0: starting date of simulation
+    :param I0: number of infected people at the beginning of the simulation
+    :param beta: model parameter - average number of contacts per person per time unit  times the probability of
+        disease transmission per contact between an infected and a susceptible person
+    :param gamma: model parameter - gamma = 1/D where D is the number of days the an infected person in infectious
+    :param R0: number of recovered people at the beginning of the simulation, default: 0
+    :param forecast: number of days in the simulation
+
+    :return: DataFrame with date-index and three columns 'S', 'I', and 'R' that contain the number of susceptible,
+        infected, and recovered people for each day of the simulation
+
     """
 
     def deriv(y, t, N, beta, gamma):
@@ -99,22 +110,33 @@ def compute_sir_model(population: int, parameter: SirParameter, recovered: Optio
         dRdt = gamma * I
         return dSdt, dIdt, dRdt
 
-    y0 = population - parameter['I0'] - recovered, parameter['I0'], recovered
+    y0 = N - I0 - R0, I0, R0
     t = np.linspace(0, forecast - 1, forecast)
 
-    dummy = odeint(deriv, y0, t, args=(population,
-                                       parameter['betagamma'].iloc[0]['beta'],
-                                       parameter['betagamma'].iloc[0]['gamma']))
+    dummy = odeint(deriv, y0, t, args=(N, beta, gamma))
     SIR_data = pd.DataFrame(data=dummy, columns=['S', 'I', 'R'],
-                            index=[parameter['t0'] + timedelta(days=x) for x in range(forecast)])
+                            index=[t0 + timedelta(days=x) for x in range(forecast)])
     return SIR_data
 
 
 def compute_sir_model_with_measures(population: int, parameter: SirParameter, forecast: int = 600) -> pd.DataFrame:
     """
-    Simulates the pandemics based on the SIR model, where parameters might change over time
+    Simulates the pandemics based on the SIR model, once ignoring and once implementing possible updates of the flow
+    parameters beta and gamma in order to simulate the implementation of measures by the government
+
+    :parm population: the size of the population
+    :param parameter: a dict of type SirParameter that contains the model parameters, possibly including several
+        updates of the flow parameters beta and gamma
+    :param forecast: number of days in the forecast
+
+    :return: DataFrame with date-index and six columns 'S0', 'I0', 'R0', 'S', 'I', and 'R', the first three columns
+        contain the figures for susceptible, infected and recovered people in a simulation that ignores updates of the
+        flow parameters beta and gamma, i.e. the entire time horizon is simulated with the parameters valid at t0 -
+        this simulates an epidemics when the government does not implement any measures
+        the last three columns implement contain the figures for susceptible, infected and recovered people in a
+        simulation that updates the flow parameters beta and gamma as defined in parameter; this simulates an epidemics
+        in which the government implements measures to slow down the propagation
     """
-    #TODO: write comment
     #TODO: use cleaned function in main script
     simulation_starts = list(parameter["betagamma"].index)
     simulation_ends = simulation_starts[1:] + [simulation_starts[0] + timedelta(days=forecast + 1)]
@@ -124,13 +146,15 @@ def compute_sir_model_with_measures(population: int, parameter: SirParameter, fo
     SIR_data = pd.DataFrame([inital_state], columns=["S", "I", "R"], index=[simulation_starts[0]])
 
     for interval in simulation_intervals:
-        interval_parameter: SirParameter = {'I0': SIR_data.loc[interval["start"], "I"],
-                                            't0': interval["start"],
-                                            'betagamma': parameter["betagamma"].loc[[interval["start"]], :]}
         interval_duration = (interval["end"] - interval["start"]).days + 1
-        interval_simulation = compute_sir_model(population=population, parameter=interval_parameter,
-                                                recovered=SIR_data.loc[interval["start"], "R"],
-                                                forecast=interval_duration)
+        interval_simulation = compute_sir_model(t0=interval["start"],
+                                                I0=SIR_data.loc[interval["start"], "I"],
+                                                N=population,
+                                                beta=parameter["betagamma"].loc[interval["start"], "beta"],
+                                                gamma=parameter["betagamma"].loc[interval["start"], "gamma"],
+                                                R0=SIR_data.loc[interval["start"], "R"],
+                                                forecast = interval_duration
+                                                )
         SIR_data = SIR_data.append(interval_simulation.drop(index=interval["start"]))
 
     return SIR_data
@@ -146,7 +170,11 @@ if __name__ == "__main__":
                                                         index=[date(2020, 2, 1), date(2020, 3, 15)])}
 
     SIR_data_old = compute_sir_model_old(data=data, country="Ctry1", parameter=parameter, forecast=100)
-    SIR_data_without_measures = compute_sir_model(population=population, parameter=parameter, forecast=100)
+    SIR_data_without_measures = compute_sir_model(t0=parameter["t0"], I0=parameter["I0"], N=population,
+                                                  beta=parameter["betagamma"].iloc[0, 0],
+                                                  gamma=parameter["betagamma"].iloc[0, 1],
+                                                  forecast=100)
+
     SIR_data_with_measures = compute_sir_model_with_measures(population=population, parameter=parameter, forecast=100)
 
     #SIR_without_measures = SIR_data_old[["S0", "I0", "R0"]].join(SIR_data_without_measures)
