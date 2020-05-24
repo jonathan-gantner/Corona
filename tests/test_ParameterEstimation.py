@@ -1,5 +1,5 @@
 from SIR import SirParameter
-from ParameterEstimation import estimate_sir_parameters
+from SIR import estimate_sir_parameters
 import pandas as pd
 from datetime import timedelta, date
 import matplotlib.pyplot as plt

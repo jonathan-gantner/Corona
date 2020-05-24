@@ -6,7 +6,6 @@ import numpy as np
 from datetime import timedelta, date
 from time import mktime
 
-import os
 
 import dash
 import dash_core_components as dcc
@@ -15,9 +14,7 @@ import plotly.express as px
 
 from DataPreparation import load_covid19_data, load_world_data
 from DataPlotting import plotdata
-from ParameterEstimation import estimate_sir_parameters
-from SIR import compute_sir_model_old
-
+from SIR import estimate_sir_parameters, compute_sir_model_with_measures
 
 external_stylesheets = ['https://codepen.io/chriddyp/pen/bWLwgP.css']
 
@@ -84,6 +81,7 @@ def create_map(selected, title, setdate):
 
 
 def create_data_series(data, country, title):
+    #ToDo: infected is not currently infected!
     return {
         'data': [dict(
             x=data.index,
@@ -137,9 +135,22 @@ def update_data_series(clickData, selected, options):
     dash.dependencies.Output('graph_model', 'figure'),
     [dash.dependencies.Input('graph_map', 'clickData'), dash.dependencies.Input('metric-selected', 'value'), dash.dependencies.Input('metric-selected', 'options')])
 def update_model_series(clickData, selected, options):
-    parameter = estimate_sir_parameters(data['confirmed']['data'] - (data['deaths']['data'] + data['recovered']['data']), clickData['points'][0]['location'])
-    data_model = compute_sir_model_old(data, clickData['points'][0]['location'], parameter, forecast=600)
-    return create_model_series(data_model, clickData['points'][0]['location'], [entry['label'] for entry in options if entry['value'] == selected][0])
+    #ToDo: hand over only selected option!
+    country = clickData['points'][0]['location']
+    country_population = data['population'][country]
+    country_history_infected = data['confirmed']['data'][country] \
+                               - (data['deaths']['data'][country] + data['recovered']['data'][country])
+    # parameter = estimate_sir_parameters(), )
+    #ToDo: implement country-specific threshold for estimation
+    parameter = estimate_sir_parameters(country_history_infected)
+    data_model = compute_sir_model_with_measures(population=country_population, parameter=parameter,
+                                                 forecast=600, ignore_measures=True)
+    data_model = data_model.rename({'I': 'I0', 'S': 'S0', 'R': 'R0'}, axis=1)
+    data_model = data_model.join(compute_sir_model_with_measures(population=country_population,
+                                                                 parameter=parameter, forecast=600))
+
+    return create_model_series(data=data_model, country=country,
+                               title=[entry['label'] for entry in options if entry['value'] == selected][0])
 
 
 if __name__ == '__main__':

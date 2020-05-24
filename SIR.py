@@ -2,7 +2,7 @@
 """
 Created on Tue Mar 17 08:33:58 2020
 
-@author: pribahsn
+@author: pribahsn & jgantner
 
 Implements SIR model as defined in https://en.wikipedia.org/wiki/Compartmental_models_in_epidemiology#The_SIR_model
 """
@@ -13,6 +13,8 @@ import matplotlib.pyplot as plt
 from datetime import timedelta, date
 from scipy.integrate import odeint
 from typing import Optional
+
+from scipy.optimize import curve_fit
 from typing_extensions import TypedDict
 
 
@@ -119,31 +121,36 @@ def compute_sir_model(t0: date, I0: int, N: int, beta: float, gamma: float, R0: 
     return SIR_data
 
 
-def compute_sir_model_with_measures(population: int, parameter: SirParameter, forecast: int = 600) -> pd.DataFrame:
+def compute_sir_model_with_measures(population: int, parameter: SirParameter, forecast: int = 600,
+                                    ignore_measures: bool = False) -> pd.DataFrame:
     """
-    Simulates the pandemics based on the SIR model, once ignoring and once implementing possible updates of the flow
+    Simulates the pandemics based on the SIR model with possible updates of the flow
     parameters beta and gamma in order to simulate the implementation of measures by the government
 
-    :parm population: the size of the population
+    :param population: the size of the population
     :param parameter: a dict of type SirParameter that contains the model parameters, possibly including several
         updates of the flow parameters beta and gamma
     :param forecast: number of days in the forecast
+    :param ignore_measures: bolean - if True, then measures are ignored and the entire time horizon is computed
+        with the parameters given for the first time interval, i.e. at the beginning of the simulation
 
-    :return: DataFrame with date-index and six columns 'S0', 'I0', 'R0', 'S', 'I', and 'R', the first three columns
-        contain the figures for susceptible, infected and recovered people in a simulation that ignores updates of the
-        flow parameters beta and gamma, i.e. the entire time horizon is simulated with the parameters valid at t0 -
-        this simulates an epidemics when the government does not implement any measures
-        the last three columns implement contain the figures for susceptible, infected and recovered people in a
-        simulation that updates the flow parameters beta and gamma as defined in parameter; this simulates an epidemics
-        in which the government implements measures to slow down the propagation
+    :return: DataFrame with date-index and thre columns 'S', 'I', and 'R', that contain the figures for susceptible,
+        infected and recovered people in the simulation
     """
     #TODO: use cleaned function in main script
-    simulation_starts = list(parameter["betagamma"].index)
-    simulation_ends = simulation_starts[1:] + [simulation_starts[0] + timedelta(days=forecast + 1)]
-    simulation_intervals = [{"start": start, "end": end} for start, end in zip(simulation_starts, simulation_ends)]
+    if ignore_measures:
+        simulation_intervals = [{"start": parameter["betagamma"].index[0],
+                                "end": parameter["betagamma"].index[0] + timedelta(days=forecast + 1)}]
+    else:
+        simulation_starts = list(parameter["betagamma"].index)
+        simulation_ends = simulation_starts[1:] + [simulation_starts[0] + timedelta(days=forecast + 1)]
+        if len(simulation_ends) > 1:
+            assert all(t1 < t2 for t1, t2 in zip(simulation_ends[:-1], simulation_ends[1:])), \
+                "Simulation was started with illegal parameter changes; change is after end of simulation"
+        simulation_intervals = [{"start": start, "end": end} for start, end in zip(simulation_starts, simulation_ends)]
 
-    inital_state = [population, parameter["I0"], 0]
-    SIR_data = pd.DataFrame([inital_state], columns=["S", "I", "R"], index=[simulation_starts[0]])
+    initial_state = [population, parameter["I0"], 0]
+    SIR_data = pd.DataFrame([initial_state], columns=["S", "I", "R"], index=[simulation_intervals[0]["start"]])
 
     for interval in simulation_intervals:
         interval_duration = (interval["end"] - interval["start"]).days + 1
@@ -153,11 +160,101 @@ def compute_sir_model_with_measures(population: int, parameter: SirParameter, fo
                                                 beta=parameter["betagamma"].loc[interval["start"], "beta"],
                                                 gamma=parameter["betagamma"].loc[interval["start"], "gamma"],
                                                 R0=SIR_data.loc[interval["start"], "R"],
-                                                forecast = interval_duration
+                                                forecast=interval_duration
                                                 )
         SIR_data = SIR_data.append(interval_simulation.drop(index=interval["start"]))
 
     return SIR_data
+
+
+def estimate_sir_parameters(history_infected, threshold=250, output=False, forecast=50, first_segment=15, last_segment=20):
+    """"
+    Estimates the parameters for the SIR model defined
+
+    Estimation is conducted assuming exponential growth I(t) = I0 * exp(beta * t) of the infected at the early stage
+    of the epidemics. It is performed by least-square regression  log I(t) ~ beta * t + log(I0),
+
+    :param history_infected: history of data on which the fit is conducted
+    :param country:
+    :param threshold: history is taken into account from the day when confirmed cases exceed threshold
+    :param output:
+    :param forecast:
+    :param first_segment:
+    :param last_segment:
+    """
+
+    def linear(x, A, B):
+        return A+B*x
+
+    def exponential(x, A, B):
+        return A*np.exp(B * x)
+
+    # extract relevant history
+    data_confirmed = history_infected[history_infected > threshold]
+    data_confirmed_start_date = data_confirmed.index[0]
+    time_index = np.array(range(0, len(data_confirmed)))
+
+    # fit parameters for first segment
+    log_first_segment = np.log(data_confirmed.values[:first_segment])
+    guess_log_I0 = log_first_segment[0]
+    guess_growth_rate = ((log_first_segment[1:] - guess_log_I0) / time_index[1:first_segment]).mean()
+    guessed_parameters = [guess_log_I0, guess_growth_rate]
+    first_segment_fit, _ = curve_fit(linear, time_index[:first_segment], log_first_segment, p0=guessed_parameters)
+
+    # gamma taken as average time till recovery
+    # TODO: research and add estimation for gamma
+    gamma = 1/15
+    betagamma = pd.DataFrame({'beta': first_segment_fit[1] - gamma, 'gamma': gamma}, index=[data_confirmed_start_date])
+
+    # estimate point in time when measures show effect and estimate parameters with measures
+    if last_segment is not None:
+        # estimate flow parameters for period with active measures
+        last_segment_start = len(data_confirmed) - last_segment
+        log_last_segment = np.log(data_confirmed.values[-last_segment:])
+        guess_growth_rate = ((log_last_segment[1:] - log_last_segment[0]) / np.arange(1, len(log_last_segment))).mean()
+        guess_log_I0 = log_last_segment[0] * np.exp(-guess_growth_rate * last_segment_start)
+        guessed_parameters = [guess_log_I0, guess_growth_rate]
+        last_segment_fit, _ = curve_fit(linear, time_index[-last_segment:], log_last_segment, p0=guessed_parameters)
+
+        # compare prediction with and without measures and estimate time when measures start to show effects;
+        # we estimate this as the day when the two curves cross; since the curve with measures is a flatter exponential
+        # that starts at a higher level, this is the day when the prediction with measures is for the first time higher
+        # than the prediction without measures
+        prediction_first_fit = exponential(range(forecast), np.exp(first_segment_fit[0]), first_segment_fit[1])
+        prediction_last_fit = exponential(range(forecast), np.exp(last_segment_fit[0]), last_segment_fit[1])
+        no_curfew_days = int(sum(prediction_last_fit - prediction_first_fit > 0))
+        if no_curfew_days < forecast:
+            time_curfew = data_confirmed_start_date + timedelta(days=no_curfew_days)
+            betagamma = betagamma.append(
+                pd.DataFrame({'beta': last_segment_fit[1] - gamma, 'gamma': gamma}, index=[time_curfew])
+            )
+
+    if output:
+        print(f'ɣ: {gamma}')
+        print(f'β: {first_segment_fit[1]+gamma}')
+        print(f'I₀: {np.exp(first_segment_fit[0])}')
+        print(f'R₀: {(first_segment_fit[1]+gamma)/gamma}')
+        print(f't₀: {data_confirmed_start_date}')
+
+        #add time index to forecasts
+        forecast_time_index = [data_confirmed_start_date + timedelta(days=k) for k in range(forecast)]
+        prediction_first_fit = pd.Series(prediction_first_fit, index=forecast_time_index)
+        prediction_last_fit = pd.Series(prediction_last_fit, index=forecast_time_index)
+
+        # plot forecasts
+        plt.plot(prediction_first_fit)
+        plt.plot(prediction_last_fit)
+        plt.plot(data_confirmed)
+        plt.yscale('log')
+        plt.grid(which='both')
+        plt.show()
+
+    parameters: SirParameter = {'I0': np.exp(first_segment_fit[0]),
+                                't0': data_confirmed_start_date,
+                                'betagamma': betagamma}
+    return parameters
+
+
 
 
 if __name__ == "__main__":
@@ -170,10 +267,8 @@ if __name__ == "__main__":
                                                         index=[date(2020, 2, 1), date(2020, 3, 15)])}
 
     SIR_data_old = compute_sir_model_old(data=data, country="Ctry1", parameter=parameter, forecast=100)
-    SIR_data_without_measures = compute_sir_model(t0=parameter["t0"], I0=parameter["I0"], N=population,
-                                                  beta=parameter["betagamma"].iloc[0, 0],
-                                                  gamma=parameter["betagamma"].iloc[0, 1],
-                                                  forecast=100)
+    SIR_data_without_measures = compute_sir_model_with_measures(population=population, parameter=parameter,
+                                                                forecast=100, ignore_measures=True)
 
     SIR_data_with_measures = compute_sir_model_with_measures(population=population, parameter=parameter, forecast=100)
 
